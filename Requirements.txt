@@ -1,0 +1,7 @@
+Flask
+torch
+transformers
+gTTS
+SpeechRecognition
+pydub
+python-dotenv
