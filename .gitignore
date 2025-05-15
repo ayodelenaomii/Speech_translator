@@ -1,6 +1,14 @@
-Facebook model\
-.env\
-venv\
-__paycache__\
-.vscode\
+# Ignore Facebook model folder (space escaped with backslash)
+Facebook\ model/
 
+# Ignore environment variables file
+.env
+
+# Ignore virtual environment folder
+venv/
+
+# Ignore Python cache folders
+__pycache__/
+
+# Ignore VSCode settings folder
+.vscode/
