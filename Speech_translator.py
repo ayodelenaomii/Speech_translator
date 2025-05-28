@@ -1,12 +1,15 @@
 import os
 import logging
 import requests
+from urllib.parse import urlparse
 from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
 from dotenv import load_dotenv
 import torch
 import json
 
-# Load environment variables
+logger = logging.getLogger(__name__)
+
+# Load environment variables first
 load_dotenv()
 
 # Set up logging
@@ -19,6 +22,10 @@ _mbart_tokenizer = None
 
 # Local model path - UPDATE THIS PATH TO YOUR LOCAL MODEL DIRECTORY
 LOCAL_MBART_PATH = "C:\\Users\\USER\\Downloads\\Audio-Audio-translator\\Facebook model"
+
+# Spitch API configuration
+SPITCH_API_KEY = os.getenv("SPITCH_API_KEY", "sk_hQD6CYG6pOypyPIunknn7Bg4DcDRvAYvW71hjBLJ")
+SPITCH_BASE_URL = "https://api.spi-tch.com/v1"
 
 def load_mbart_model():
     """Load MBART model and tokenizer from local path (cached)"""
@@ -102,118 +109,180 @@ def translate_text_with_mbart(text, source_lang, target_lang):
         logger.error(f"MBART translation error: {e}")
         raise Exception(f"MBART translation failed: {str(e)}")
 
-def translate_text_with_spitch(text, source_lang, target_lang):
-    """
-    Translate text using Spitch API
-    
-    Args:
-        text (str): Text to translate
-        source_lang (str): Source language code (e.g., 'en')
-        target_lang (str): Target language code (e.g., 'yo')
-    
-    Returns:
-        str: Translated text
-    """
+def test_connection(url, timeout=10):
+    """Test if we can connect to the API endpoint"""
     try:
-        if not text or not text.strip():
-            raise ValueError("Input text is empty")
+        parsed_url = urlparse(url)
+        test_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
         
-        logger.info(f"Translating with Spitch: '{text}' from {source_lang} to {target_lang}")
+        response = requests.get(test_url, timeout=timeout)
+        logger.info(f"Connection test successful to {test_url}")
+        return True
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Cannot connect to {test_url}")
+        return False
+    except requests.exceptions.Timeout:
+        logger.error(f"Connection timeout to {test_url}")
+        return False
+    except Exception as e:
+        logger.error(f"Connection test failed: {e}")
+        return False
+
+def translate_text_with_spitch_api(text, source_lang, target_lang):
+    """
+    Translate text using Spitch API with improved error handling and API format
+    """
+    if not text or not text.strip():
+        raise ValueError("Input text is empty")
+    
+    logger.info(f"Translating with Spitch API: '{text}' from {source_lang} to {target_lang}")
+    
+    headers = {
+        "Authorization": f"Bearer {SPITCH_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    # Updated payload format based on common API patterns
+    payload = {
+        "text": text.strip(),
+        "source_language": source_lang,  # Try different parameter names
+        "target_language": target_lang,
+        "source": source_lang,  # Keep original format as backup
+        "target": target_lang
+    }
+    
+    try:
+        # Convert payload to JSON string manually to avoid 'json' parameter issue
+        json_payload = json.dumps(payload)
         
-        # Get API credentials from environment
-        api_key = os.getenv('SPITCH_API_KEY')
-        api_url = os.getenv('SPITCH_API_URL', 'https://api.spitch.com/v1/translate')
-        
-        if not api_key:
-            raise Exception("SPITCH_API_KEY not found in environment variables")
-        
-        # Prepare headers
-        headers = {
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'Speech-Translator/1.0'
-        }
-        
-        # Prepare payload
-        payload = {
-            'text': text.strip(),
-            'source_language': source_lang,
-            'target_language': target_lang
-        }
-        
-        logger.debug(f"Spitch API request: {payload}")
-        
-        # Convert payload to JSON string for the request
-        json_data = json.dumps(payload)
-        
-        # Make API request with proper error handling - FIXED VERSION
-        try:
-            response = requests.post(
-                api_url,
-                headers=headers,
-                data=json_data,  # Use 'data' instead of 'json' parameter
-                timeout=30
-            )
-        except TypeError as e:
-            # Fallback method if the above doesn't work
-            logger.warning(f"First request method failed: {e}. Trying alternative method.")
-            response = requests.post(
-                api_url,
-                headers=headers,
-                timeout=30
-            )
-            # Send data in the request body manually
-            response._content = json_data.encode('utf-8')
-        
-        logger.debug(f"Spitch API response status: {response.status_code}")
+        response = requests.post(
+            f"{SPITCH_BASE_URL}/translate",
+            headers=headers,
+            data=json_payload,  # Use 'data' instead of 'json'
+            timeout=30
+        )
         
         if response.status_code == 200:
-            try:
-                result = response.json()
-            except json.JSONDecodeError:
-                # If response is not JSON, treat as plain text
-                result = {'translated_text': response.text.strip()}
+            result = response.json()
             
-            logger.debug(f"Spitch API response: {result}")
-            
-            # Extract translated text (adjust based on actual API response format)
+            # Try multiple possible response field names
             translated_text = (
                 result.get('translated_text') or 
                 result.get('translation') or 
-                result.get('result') or 
-                result.get('data', {}).get('translation') if isinstance(result.get('data'), dict) else None
+                result.get('output') or 
+                result.get('text') or
+                result.get('result', '')
             )
             
             if translated_text:
-                logger.info(f"Spitch translation successful: '{translated_text}'")
+                logger.info(f"Translation successful: '{translated_text}'")
                 return translated_text.strip()
             else:
-                raise Exception("No translated text found in API response")
-                
-        elif response.status_code == 401:
-            raise Exception("Authentication failed - check API key")
-        elif response.status_code == 400:
-            try:
-                error_msg = response.json().get('error', response.text)
-            except:
-                error_msg = response.text
-            raise Exception(f"Bad request: {error_msg}")
-        elif response.status_code == 429:
-            raise Exception("Rate limit exceeded - try again later")
+                logger.error(f"No translated text found in response: {result}")
+                raise Exception("Translation failed: No translated text found")
         else:
-            raise Exception(f"API error {response.status_code}: {response.text}")
-            
-    except requests.exceptions.Timeout:
-        raise Exception("Request timeout - Spitch API is slow to respond")
-    except requests.exceptions.ConnectionError:
-        raise Exception("Connection error - check internet connection")
+            logger.error(f"API error {response.status_code}: {response.text}")
+            raise Exception(f"Translation failed: HTTP {response.status_code} - {response.text}")
+    
     except requests.exceptions.RequestException as e:
-        raise Exception(f"Request error: {str(e)}")
+        logger.error(f"Request failed: {e}")
+        raise Exception(f"Translation request failed: {str(e)}")
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON response: {e}")
+        raise Exception(f"Translation failed: Invalid JSON response")
     except Exception as e:
-        if "Spitch" not in str(e):
-            logger.error(f"Spitch translation error: {e}")
+        logger.error(f"Translation failed: {e}")
         raise
+
+def translate_text_with_spitch_sdk():
+    """
+    Alternative method using Spitch SDK if available
+    Install with: pip install spitch
+    """
+    try:
+        import spitch
+        
+        # Initialize client
+        client = spitch.Client(api_key=SPITCH_API_KEY)
+        
+        def translate_with_sdk(text, source_lang, target_lang):
+            logger.info(f"Using Spitch SDK: '{text}' from {source_lang} to {target_lang}")
+            
+            response = client.translate(
+                text=text,
+                source_language=source_lang,
+                target_language=target_lang
+            )
+            
+            return response.translated_text
+        
+        return translate_with_sdk
+        
+    except ImportError:
+        logger.warning("Spitch SDK not installed. Use: pip install spitch")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to initialize Spitch SDK: {e}")
+        return None
+
+# Create an alias for backward compatibility
+translate_text_with_spitch = translate_text_with_spitch_api
+
+def test_spitch_connection():
+    """Test Spitch API connection with multiple methods"""
+    print(" Testing Spitch API connection")
+
+    # Test 1: Direct API call
+    try:
+        translated = translate_text_with_spitch_api("Hello", "en", "yo")
+        print(f" Direct API translation successful: {translated}")
+        return True
+    except Exception as e:
+        print(f" Direct API test failed: {e}")
+    
+    # Test 2: Try SDK if available
+    sdk_translate = translate_text_with_spitch_sdk()
+    if sdk_translate:
+        try:
+            translated = sdk_translate("Hello", "en", "yo")
+            print(f" SDK translation successful: {translated}")
+            return True
+        except Exception as e:
+            print(f" SDK test failed: {e}")
+    
+    # Test 3: Alternative API endpoints
+    alternative_endpoints = [
+        f"{SPITCH_BASE_URL}/translation",
+        f"{SPITCH_BASE_URL}/translate-text",
+        "https://api.spitch.app/v1/translate"
+    ]
+    
+    for endpoint in alternative_endpoints:
+        try:
+            headers = {
+                "Authorization": f"Bearer {SPITCH_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = json.dumps({
+                "text": "Hello",
+                "source": "en",
+                "target": "yo"
+            })
+            
+            response = requests.post(endpoint, headers=headers, data=payload, timeout=10)
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f" Alternative endpoint {endpoint} works: {result}")
+                return True
+            else:
+                print(f" Alternative endpoint {endpoint} failed: {response.status_code}")
+                
+        except Exception as e:
+            print(f" Alternative endpoint {endpoint} error: {e}")
+    
+    return False
 
 def translate_text_fallback(text, source_lang, target_lang):
     """
@@ -392,7 +461,7 @@ def test_translations():
             if method == "mbart":
                 result = translate_text_with_mbart(text, source, target)
             elif method == "spitch":
-                result = translate_text_with_spitch(text, source, target)
+                result = translate_text_with_spitch_api(text, source, target)
             else:
                 result = translate_text_fallback(text, source, target)
             
@@ -408,4 +477,15 @@ def test_translations():
                 print(f" Fallback also failed: {fe}")
 
 if __name__ == "__main__":
+    # First test the connection
+    print(" Testing Spitch API Connection")
+    print("-" * 30)
+    connection_success = test_spitch_connection()
+    
+    print("\n" + "=" * 50)
+    
+    # Then test translations
     test_translations()
+    
+    # Print requests version for debugging
+    print(f"\n Requests version: {requests.__version__}")
