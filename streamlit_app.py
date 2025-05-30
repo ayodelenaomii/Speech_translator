@@ -1,4 +1,10 @@
 import streamlit as st
+
+st.set_page_config(
+    page_title="Speech-to-Speech Translator",
+    page_icon="🗣️",
+    layout="wide"
+)
 import tempfile
 import time
 from io import BytesIO
@@ -321,17 +327,17 @@ def main():
     
     # Sidebar for configuration
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.header("Configuration")
         
         # API Status
         spitch_available = bool(os.getenv('SPITCH_API_KEY'))
         st.write("**API Status:**")
-        st.write(f"Spitch API: {'✅ Available' if spitch_available else '❌ Not Available'}")
+        st.write(f"Spitch API: {'Available' if spitch_available else '❌ Not Available'}")
         
         st.markdown("---")
         
         # Source Language Configuration
-        st.subheader("🔤 Source Language")
+        st.subheader("Source Language")
         source_type = st.selectbox(
             "Source Language Type",
             ["African", "Others"],
@@ -354,7 +360,7 @@ def main():
             )
         
         # Target Language Configuration
-        st.subheader("🎯 Target Language")
+        st.subheader("Target Language")
         target_type = st.selectbox(
             "Target Language Type",
             ["African", "Others"],
@@ -380,10 +386,10 @@ def main():
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.header("🔄 Translation Interface")
+        st.header("Translation Interface")
         
         # Configuration Summary
-        with st.expander("📋 Current Configuration", expanded=True):
+        with st.expander("Current Configuration", expanded=True):
             source_name = AFRICAN_LANGUAGES.get(source_lang) or OTHER_LANGUAGES.get(source_lang)
             target_name = AFRICAN_LANGUAGES.get(target_lang) or OTHER_LANGUAGES.get(target_lang)
             
@@ -391,7 +397,7 @@ def main():
             st.write(f"**Target:** {target_lang} ({target_name}) [{target_type}]")
         
         # Input methods
-        st.subheader("📝 Input Methods")
+        st.subheader("Input Methods")
         input_method = st.radio(
             "Choose input method:",
             ["Text Input", "Audio Upload", "Live Recording"],
@@ -458,7 +464,7 @@ def main():
                     text_input = st.session_state.transcribed_text
                     st.info(f"Current transcribed text: {text_input}")
                     
-                    if st.button("🗑️ Clear Transcribed Text"):
+                    if st.button("Clear Transcribed Text"):
                         st.session_state.transcribed_text = ""
                         st.rerun()
                         
@@ -472,7 +478,7 @@ def main():
                     st.warning("❌ Speech recognition not available")
         
         # Translation button
-        if st.button("🔄 Translate", type="primary", disabled=not text_input):
+        if st.button("Translate", type="primary", disabled=not text_input):
             if text_input:
                 try:
                     with st.spinner("Translating..."):
@@ -491,7 +497,7 @@ def main():
                     # Add to history
                     add_to_history(text_input, translated_text, source_lang, target_lang)
                     
-                    st.success("✅ Translation completed!")
+                    st.success("Translation completed!")
                     
                 except Exception as e:
                     st.error(f"Translation failed: {e}")
@@ -512,13 +518,13 @@ def main():
             )
             
             # Text-to-Speech section
-            st.subheader("🔊 Text-to-Speech")
+            st.subheader("Text-to-Speech")
             
             # Create columns for audio buttons
             col_tts1, col_tts2 = st.columns(2)
             
             with col_tts1:
-                if st.button("▶️ Play Original", key="play_original_btn"):
+                if st.button("Play Original", key="play_original_btn"):
                     with st.spinner("Generating speech for original text..."):
                         try:
                             # Extract language code from current source lang
@@ -530,7 +536,7 @@ def main():
                             st.error(f"Error playing original: {e}")
             
             with col_tts2:
-                if st.button("▶️ Play Translation", key="play_translation_btn"):
+                if st.button("Play Translation", key="play_translation_btn"):
                     with st.spinner("Generating speech for translation..."):
                         try:
                             # Extract language code from current target lang
@@ -542,7 +548,7 @@ def main():
                             st.error(f"Error playing translation: {e}")
             
             # Clear results button
-            if st.button("🗑️ Clear Translation Results"):
+            if st.button("Clear Translation Results"):
                 st.session_state.translation_completed = False
                 st.session_state.current_original = ""
                 st.session_state.current_translation = ""
@@ -551,17 +557,17 @@ def main():
                 st.rerun()
     
     with col2:
-        st.header("📚 Translation History")
+        st.header("Translation History")
         
         if st.session_state.translation_history:
-            if st.button("🗑️ Clear History"):
+            if st.button("Clear History"):
                 st.session_state.translation_history = []
                 st.rerun()
             
             st.markdown("---")
             
             for i, item in enumerate(reversed(st.session_state.translation_history)):
-                with st.expander(f"⏰ {item['timestamp']} - {item['source_lang']} → {item['target_lang']}"):
+                with st.expander(f" {item['timestamp']} - {item['source_lang']} → {item['target_lang']}"):
                     st.write("**Original:**")
                     st.write(item['original'])
                     st.write("**Translation:**")
@@ -574,7 +580,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center'>
-            <p><strong>🗣️ Speech-to-Speech Translator</strong> | Built with Streamlit</p>
+            <p><strong> Speech-to-Speech Translator</strong> | Built with Streamlit</p>
             <p><small>Supports African languages through Spitch API and international languages through MBART</small></p>
         </div>
         """,
