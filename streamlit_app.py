@@ -1,74 +1,39 @@
 import streamlit as st
-
-st.set_page_config(
-    page_title="Speech-to-Speech Translator",
-    page_icon="🗣️",
-    layout="wide"
-)
+import speech_recognition as sr
 import tempfile
-import time
-from io import BytesIO
-import base64
 import os
+import io
+import base64
+from gtts import gTTS
+import pygame
+import threading
+import time
+from Speech_translator import translate_text_with_mbart, translate_text_with_spitch, translate_text_fallback
+from dotenv import load_dotenv
+import logging
 
-# Handle imports with error checking
+# Add Spitch TTS import
 try:
-    import speech_recognition as sr
-    SPEECH_RECOGNITION_AVAILABLE = True
+    from spitch import Client
+    SPITCH_TTS_AVAILABLE = True
 except ImportError:
-    st.error("SpeechRecognition module not found. Please install it with: pip install SpeechRecognition")
-    SPEECH_RECOGNITION_AVAILABLE = False
-    sr = None
+    SPITCH_TTS_AVAILABLE = False
+    logging.warning("Spitch SDK not available for TTS")
 
-# Add audio recorder import
-try:
-    from audio_recorder_streamlit import audio_recorder
-    AUDIO_RECORDER_AVAILABLE = True
-except ImportError:
-    st.warning("audio-recorder-streamlit not found. Install with: pip install audio-recorder-streamlit")
-    AUDIO_RECORDER_AVAILABLE = False
+# Load environment variables
+load_dotenv()
 
-try:
-    from Speech_translator import translate_text_with_mbart, translate_text_with_spitch, translate_text_fallback
-    TRANSLATOR_AVAILABLE = True
-except ImportError:
-    st.warning("Translation modules not found. Using placeholder functions.")
-    TRANSLATOR_AVAILABLE = False
-    
-    # Placeholder functions
-    def translate_text_with_mbart(text, source, target):
-        return f"[MBART Translation] {text} (from {source} to {target})"
-    
-    def translate_text_with_spitch(text, source, target):
-        return f"[Spitch Translation] {text} (from {source} to {target})"
-    
-    def translate_text_fallback(text, source, target):
-        return f"[Fallback Translation] {text} (from {source} to {target})"
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+# Initialize pygame mixer for audio playback
 try:
-    from text_to_speech import text_to_speech
-    TTS_AVAILABLE = True
-except ImportError:
-    st.warning("Text-to-speech module not found. Using placeholder function.")
-    TTS_AVAILABLE = False
-    
-    def text_to_speech(text, lang):
-        st.info(f"Would play: '{text}' in language: {lang}")
-        return True
-
-try:
-    import pygame
     pygame.mixer.init()
     PYGAME_AVAILABLE = True
 except:
     PYGAME_AVAILABLE = False
-
-# Load environment variables
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    st.warning("python-dotenv not found. Environment variables may not load properly.")
+    logger.warning("Pygame not available")
 
 # Language configurations
 AFRICAN_LANGUAGES = {
@@ -76,509 +41,438 @@ AFRICAN_LANGUAGES = {
     "ha": "Hausa", 
     "ig": "Igbo",
     "am": "Amharic",
+    "en": "English",
     "sw": "Swahili",
     "zu": "Zulu",
     "xh": "Xhosa",
-    "af": "Afrikaans",
-    "en": "English"
+    "af": "Afrikaans"
 }
 
 OTHER_LANGUAGES = {
     "en_XX": "English",
-    "fr_XX": "French", 
-    "es_XX": "Spanish",
+    "fr_XX": "French",
+    "es_XX": "Spanish", 
     "de_DE": "German",
     "it_IT": "Italian",
     "pt_XX": "Portuguese",
     "nl_XX": "Dutch",
     "pl_PL": "Polish",
-    "ro_RO": "Romanian",
-    "bg_BG": "Bulgarian",
-    "fi_FI": "Finnish",
-    "sv_SE": "Swedish",
-    "no_NO": "Norwegian",
     "ru_RU": "Russian",
     "zh_CN": "Chinese (Simplified)",
-    "zh_TW": "Chinese (Traditional)", 
     "ja_XX": "Japanese",
     "ko_KR": "Korean",
     "hi_IN": "Hindi",
-    "bn_IN": "Bengali",
-    "pa_IN": "Punjabi",
-    "ur_PK": "Urdu",
-    "th_TH": "Thai",
-    "vi_VN": "Vietnamese",
-    "id_ID": "Indonesian",
-    "ms_MY": "Malay"
+    "ar_AR": "Arabic"
 }
 
-def initialize_session_state():
-    """Initialize session state variables"""
-    if SPEECH_RECOGNITION_AVAILABLE:
-        if 'recognizer' not in st.session_state:
-            st.session_state.recognizer = sr.Recognizer()
-        if 'microphone' not in st.session_state:
-            try:
-                st.session_state.microphone = sr.Microphone()
-            except:
-                st.warning("Microphone not available")
-                st.session_state.microphone = None
-    if 'translation_history' not in st.session_state:
-        st.session_state.translation_history = []
-    if 'recorded_audio' not in st.session_state:
-        st.session_state.recorded_audio = None
-    if 'transcribed_text' not in st.session_state:
-        st.session_state.transcribed_text = ""
-    
-    # NEW: Store current translation results
-    if 'current_original' not in st.session_state:
-        st.session_state.current_original = ""
-    if 'current_translation' not in st.session_state:
-        st.session_state.current_translation = ""
-    if 'current_source_lang' not in st.session_state:
-        st.session_state.current_source_lang = ""
-    if 'current_target_lang' not in st.session_state:
-        st.session_state.current_target_lang = ""
-    if 'translation_completed' not in st.session_state:
-        st.session_state.translation_completed = False
+GTTS_LANGUAGE_MAP = {
+    'yo': 'yo', 'ha': 'ha', 'ig': 'ig', 'sw': 'sw', 'zu': 'zu', 'xh': 'xh', 
+    'af': 'af', 'am': 'am', 'en': 'en', 'en_XX': 'en', 'fr_XX': 'fr', 
+    'es_XX': 'es', 'de_DE': 'de', 'it_IT': 'it', 'pt_XX': 'pt', 
+    'nl_XX': 'nl', 'pl_PL': 'pl', 'ru_RU': 'ru', 'zh_CN': 'zh', 
+    'ja_XX': 'ja', 'ko_KR': 'ko', 'hi_IN': 'hi', 'ar_AR': 'ar'
+}
 
-def setup_microphone():
-    """Setup and test microphone"""
-    if not SPEECH_RECOGNITION_AVAILABLE or st.session_state.microphone is None:
-        return False
-    try:
-        with st.session_state.microphone as source:
-            st.session_state.recognizer.adjust_for_ambient_noise(source, duration=1)
-        return True
-    except Exception as e:
-        st.error(f"Microphone setup failed: {e}")
-        return False
+# Spitch language mapping for TTS
+SPITCH_TTS_LANGUAGE_MAP = {
+    'yo': 'yo',  # Yoruba
+    'ha': 'ha',  # Hausa
+    'ig': 'ig',  # Igbo
+    'am': 'am',  # Amharic
+    'en': 'en',  # English
+}
 
-def process_recorded_audio(audio_bytes):
-    """Process recorded audio bytes"""
-    if not SPEECH_RECOGNITION_AVAILABLE:
-        raise Exception("Speech recognition not available")
-    
-    try:
-        # Save audio bytes to temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-            tmp_file.write(audio_bytes)
-            tmp_file_path = tmp_file.name
-        
-        # Recognize speech from file
-        with sr.AudioFile(tmp_file_path) as source:
-            audio = st.session_state.recognizer.record(source)
-        
-        text = st.session_state.recognizer.recognize_google(audio, language='en-US')
-        
-        # Clean up temp file
-        os.unlink(tmp_file_path)
-        
-        return text.strip()
-    except Exception as e:
-        if 'tmp_file_path' in locals() and os.path.exists(tmp_file_path):
-            os.unlink(tmp_file_path)
-        raise Exception(f"Audio processing failed: {e}")
+SR_LANGUAGE_MAP = {
+    "yo": "en-US", "ha": "en-US", "ig": "en-US", "am": "en-US",
+    "sw": "sw-KE", "zu": "en-US", "xh": "en-US", "af": "af-ZA",
+    "en": "en-US", "en_XX": "en-US", "fr_XX": "fr-FR", "es_XX": "es-ES",
+    "de_DE": "de-DE", "it_IT": "it-IT", "pt_XX": "pt-PT", "nl_XX": "nl-NL",
+    "pl_PL": "pl-PL", "ru_RU": "ru-RU", "zh_CN": "zh-CN", "ja_XX": "ja-JP",
+    "ko_KR": "ko-KR", "hi_IN": "hi-IN", "ar_AR": "ar-AR"
+}
 
-def capture_audio_from_upload(audio_file):
-    """Process uploaded audio file"""
-    if not SPEECH_RECOGNITION_AVAILABLE:
-        raise Exception("Speech recognition not available")
-    
+def get_audio_player_html(audio_bytes, autoplay=False):
+    """Create HTML audio player"""
+    b64 = base64.b64encode(audio_bytes).decode()
+    audio_html = f"""
+    <audio controls {'autoplay' if autoplay else ''}>
+        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+        Your browser does not support the audio element.
+    </audio>
+    """
+    return audio_html
+
+def process_audio_file(audio_file, source_lang):
+    """Process uploaded audio file and convert to text"""
     try:
+        recognizer = sr.Recognizer()
+        
         # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
             tmp_file.write(audio_file.read())
             tmp_file_path = tmp_file.name
         
-        # Recognize speech from file
+        # Load audio file
         with sr.AudioFile(tmp_file_path) as source:
-            audio = st.session_state.recognizer.record(source)
+            recognizer.adjust_for_ambient_noise(source)
+            audio = recognizer.listen(source)
         
-        text = st.session_state.recognizer.recognize_google(audio, language='en-US')
+        # Get appropriate language for speech recognition
+        sr_lang = SR_LANGUAGE_MAP.get(source_lang, "en-US")
         
-        # Clean up temp file
+        # Recognize speech
+        try:
+            text = recognizer.recognize_google(audio, language=sr_lang)
+        except sr.UnknownValueError:
+            # Fallback to English if recognition fails
+            if sr_lang != "en-US":
+                text = recognizer.recognize_google(audio, language="en-US")
+            else:
+                raise
+        
+        # Clean up temporary file
         os.unlink(tmp_file_path)
         
         return text.strip()
-    except Exception as e:
-        if 'tmp_file_path' in locals() and os.path.exists(tmp_file_path):
-            os.unlink(tmp_file_path)
-        raise Exception(f"Audio processing failed: {e}")
-
-def translate_text_logic(text, source_lang, target_lang, source_type, target_type):
-    """Handle translation logic"""
-    try:
-        st.info(f"Translating: '{text}' from {source_lang} ({source_type}) to {target_lang} ({target_type})")
         
-        if source_type == "Others" and target_type == "Others":
-            # Both are non-African languages - use MBART
-            translation = translate_text_with_mbart(text, source_lang, target_lang)
-            st.success("MBART translation completed")
-            
+    except Exception as e:
+        if 'tmp_file_path' in locals():
+            try:
+                os.unlink(tmp_file_path)
+            except:
+                pass
+        raise Exception(f"Speech recognition failed: {str(e)}")
+
+def record_audio_from_mic(source_lang, duration=5):
+    """Record audio from microphone"""
+    try:
+        recognizer = sr.Recognizer()
+        microphone = sr.Microphone()
+        
+        with microphone as source:
+            recognizer.adjust_for_ambient_noise(source, duration=1)
+        
+        with microphone as source:
+            audio = recognizer.listen(source, timeout=duration, phrase_time_limit=duration)
+        
+        # Get appropriate language for speech recognition
+        sr_lang = SR_LANGUAGE_MAP.get(source_lang, "en-US")
+        
+        # Recognize speech
+        try:
+            text = recognizer.recognize_google(audio, language=sr_lang)
+        except sr.UnknownValueError:
+            # Fallback to English if recognition fails
+            if sr_lang != "en-US":
+                text = recognizer.recognize_google(audio, language="en-US")
+            else:
+                raise
+        
+        return text.strip()
+        
+    except sr.WaitTimeoutError:
+        raise Exception("No speech detected within the time limit")
+    except sr.UnknownValueError:
+        raise Exception("Could not understand the audio")
+    except Exception as e:
+        raise Exception(f"Recording failed: {str(e)}")
+
+def translate_text(text, source_lang, target_lang, source_type, target_type):
+    """Translate text using appropriate method"""
+    try:
+        if source_type.lower() == "others" and target_type.lower() == "others":
+            # Use MBART for non-African languages
+            return translate_text_with_mbart(text, source_lang, target_lang)
         else:
-            # At least one is African language - try Spitch first
+            # Try Spitch first for African languages
             spitch_available = bool(os.getenv('SPITCH_API_KEY'))
             
-            if spitch_available and TRANSLATOR_AVAILABLE:
+            if spitch_available:
                 try:
-                    translation = translate_text_with_spitch(text, source_lang, target_lang)
-                    st.success("Spitch translation completed")
+                    return translate_text_with_spitch(text, source_lang, target_lang)
                 except Exception as e:
-                    st.warning(f"Spitch failed: {e}. Using fallback...")
-                    translation = translate_text_fallback(text, source_lang, target_lang)
-                    st.info("Fallback translation completed")
+                    logger.warning(f"Spitch translation failed: {e}")
+                    return translate_text_fallback(text, source_lang, target_lang)
             else:
-                st.info("Spitch API not available, using fallback...")
-                translation = translate_text_fallback(text, source_lang, target_lang)
-        
-        return translation
-        
+                return translate_text_fallback(text, source_lang, target_lang)
+                
     except Exception as e:
-        st.error(f"Translation failed: {e}")
-        # Final fallback
-        try:
-            translation = translate_text_fallback(text, source_lang, target_lang)
-            st.warning("Using emergency fallback translation")
-            return translation
-        except Exception as fe:
-            raise Exception(f"All translation methods failed: {e}, {fe}")
+        logger.error(f"Translation failed: {e}")
+        return translate_text_fallback(text, source_lang, target_lang)
 
-def convert_to_speech_streamlit(text, target_lang):
-    """Convert text to speech for Streamlit with better error handling"""
+def spitch_tts_bytes(text, target_lang):
+    """Convert text to speech using Spitch API and return audio bytes"""
     try:
-        if not TTS_AVAILABLE:
-            st.info(f"🔊 Text-to-speech not available. Would play: '{text}' in {target_lang}")
-            return True
+        if not SPITCH_TTS_AVAILABLE:
+            raise Exception("Spitch SDK not available")
             
-        success = text_to_speech(text, target_lang)
-        if success:
-            st.success("🔊 Audio generated and played successfully!")
-        else:
-            st.warning("🔊 Audio generation completed but may not have played correctly")
-        return success
+        spitch_api_key = os.getenv("SPITCH_API_KEY")
+        if not spitch_api_key:
+            raise Exception("Spitch API key not found")
+
+        client = Client(api_key=spitch_api_key)
+        spitch_lang = SPITCH_TTS_LANGUAGE_MAP.get(target_lang, target_lang)
+
+        logger.info(f"Using Spitch TTS for {spitch_lang}: '{text}'")
+
+        response = client.speech.generate(
+            text=text,
+            language=spitch_lang,
+            voice='sade'
+        )
+
+        audio_bytes = response.read()
+        
+        if not audio_bytes:
+            raise Exception("No audio content received from Spitch")
+            
+        logger.info("Spitch TTS successful")
+        return audio_bytes
+        
     except Exception as e:
-        st.error(f"🔊 Speech conversion failed: {e}")
-        return False
+        logger.error(f"Spitch TTS failed: {e}")
+        raise
 
-def display_translation_result(original, translated, source_lang, target_lang):
-    """Display translation results in a formatted way"""
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Original Text")
-        st.info(f"**Language:** {source_lang}")
-        st.write(original)
-    
-    with col2:
-        st.subheader("Translated Text")  
-        st.success(f"**Language:** {target_lang}")
-        st.write(translated)
+def google_tts_bytes(text, target_lang):
+    """Convert text to speech using Google TTS and return audio bytes"""
+    try:
+        gtts_lang = GTTS_LANGUAGE_MAP.get(target_lang, target_lang.split('_')[0] if '_' in target_lang else target_lang)
+        
+        logger.info(f"Using Google TTS for {gtts_lang}: '{text}'")
+        
+        try:
+            tts = gTTS(text=text, lang=gtts_lang, slow=False)
+        except Exception as e:
+            if "Language not supported" in str(e):
+                if gtts_lang != 'en':
+                    logger.info("Falling back to English for Google TTS")
+                    tts = gTTS(text=text, lang='en', slow=False)
+                else:
+                    raise
+            else:
+                raise
+        
+        # Save to bytes
+        audio_buffer = io.BytesIO()
+        tts.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+        
+        logger.info("Google TTS successful")
+        return audio_buffer.getvalue()
+        
+    except Exception as e:
+        logger.error(f"Google TTS failed: {e}")
+        raise
 
-def add_to_history(original, translated, source_lang, target_lang):
-    """Add translation to history"""
-    st.session_state.translation_history.append({
-        'original': original,
-        'translated': translated,
-        'source_lang': source_lang,
-        'target_lang': target_lang,
-        'timestamp': time.strftime("%H:%M:%S")
-    })
+def text_to_speech_bytes(text, target_lang):
+    """Convert text to speech and return audio bytes - with Spitch TTS support"""
+    try:
+        if not text or not text.strip():
+            raise Exception("Empty text provided for TTS")
+            
+        # Check if target language is African and Spitch TTS is available
+        african_langs = ['yo', 'ha', 'ig', 'sw', 'zu', 'xh', 'af', 'am']
+        
+        if target_lang in african_langs and SPITCH_TTS_AVAILABLE and os.getenv('SPITCH_API_KEY'):
+            logger.info(f"Attempting Spitch TTS for African language: {target_lang}")
+            try:
+                return spitch_tts_bytes(text, target_lang)
+            except Exception as e:
+                logger.warning(f"Spitch TTS failed, falling back to Google TTS: {e}")
+        
+        # Fallback to Google TTS
+        return google_tts_bytes(text, target_lang)
+        
+    except Exception as e:
+        logger.error(f"TTS failed: {e}")
+        raise Exception(f"Text-to-speech conversion failed: {str(e)}")
 
-
-    # Initialize session state
-    initialize_session_state()
+def main():
+    st.set_page_config(
+        page_title="Speech-to-Speech Translator",
+        page_icon="🎤",
+        layout="wide"
+    )
     
-    # Header
-    st.title("🗣️ Speech-to-Speech Translator")
-    st.markdown("---")
+    st.title("🎤 Speech-to-Speech Translator")
+    st.markdown("Real-time audio translation with support for African and international languages")
     
-    # Show module status
-    st.subheader("System Status")
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        st.write("**Speech Recognition:**")
-        st.write("✅ Available" if SPEECH_RECOGNITION_AVAILABLE else "❌ Not Available")
-    
-    with col2:
-        st.write("**Audio Recorder:**")
-        st.write("✅ Available" if AUDIO_RECORDER_AVAILABLE else "❌ Not Available")
-    
-    with col3:
-        st.write("**Translation:**")
-        st.write("✅ Available" if TRANSLATOR_AVAILABLE else "⚠️ Placeholder")
-    
-    with col4:
-        st.write("**Text-to-Speech:**")
-        st.write("✅ Available" if TTS_AVAILABLE else "⚠️ Placeholder")
-    
-    with col5:
-        st.write("**Audio Processing:**")
-        st.write("✅ Available" if PYGAME_AVAILABLE else "❌ Not Available")
-    
-    st.markdown("---")
-    
-    # Sidebar for configuration
+    # Sidebar configuration
     with st.sidebar:
-        st.header("Configuration")
+        st.header("⚙️ Configuration")
         
         # API Status
         spitch_available = bool(os.getenv('SPITCH_API_KEY'))
         st.write("**API Status:**")
-        st.write(f"Spitch API: {'Available' if spitch_available else '❌ Not Available'}")
+        st.write(f"🔹 Spitch Translation: {'✅ Available' if spitch_available else '❌ Not Available'}")
+        st.write(f"🔹 Spitch TTS: {'✅ Available' if (spitch_available and SPITCH_TTS_AVAILABLE) else '❌ Not Available'}")
+        st.write("🔹 MBART Model: ✅ Available")
+        st.write("🔹 Google TTS: ✅ Available")
         
-        st.markdown("---")
+        st.divider()
         
-        # Source Language Configuration
-        st.subheader("Source Language")
+        # Source Language
+        st.subheader("🎯 Source Language")
         source_type = st.selectbox(
-            "Source Language Type",
+            "Language Type:",
             ["African", "Others"],
             key="source_type"
         )
         
         if source_type == "African":
             source_lang = st.selectbox(
-                "Select Source Language",
+                "Select Language:",
                 list(AFRICAN_LANGUAGES.keys()),
                 format_func=lambda x: f"{x} - {AFRICAN_LANGUAGES[x]}",
                 key="source_lang"
             )
         else:
             source_lang = st.selectbox(
-                "Select Source Language", 
+                "Select Language:",
                 list(OTHER_LANGUAGES.keys()),
                 format_func=lambda x: f"{x} - {OTHER_LANGUAGES[x]}",
                 key="source_lang"
             )
         
-        # Target Language Configuration
-        st.subheader("Target Language")
+        # Target Language
+        st.subheader("🎯 Target Language")
         target_type = st.selectbox(
-            "Target Language Type",
+            "Language Type:",
             ["African", "Others"],
             key="target_type"
         )
         
         if target_type == "African":
             target_lang = st.selectbox(
-                "Select Target Language",
+                "Select Language:",
                 list(AFRICAN_LANGUAGES.keys()),
                 format_func=lambda x: f"{x} - {AFRICAN_LANGUAGES[x]}",
                 key="target_lang"
             )
         else:
             target_lang = st.selectbox(
-                "Select Target Language",
+                "Select Language:",
                 list(OTHER_LANGUAGES.keys()),
                 format_func=lambda x: f"{x} - {OTHER_LANGUAGES[x]}",
                 key="target_lang"
             )
     
     # Main content area
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.header("Translation Interface")
+        st.header("🎤 Input Audio")
         
-        # Configuration Summary
-        with st.expander("Current Configuration", expanded=True):
-            source_name = AFRICAN_LANGUAGES.get(source_lang) or OTHER_LANGUAGES.get(source_lang)
-            target_name = AFRICAN_LANGUAGES.get(target_lang) or OTHER_LANGUAGES.get(target_lang)
-            
-            st.write(f"**Source:** {source_lang} ({source_name}) [{source_type}]")
-            st.write(f"**Target:** {target_lang} ({target_name}) [{target_type}]")
-        
-        # Input methods
-        st.subheader("Input Methods")
+        # Input method selection
         input_method = st.radio(
             "Choose input method:",
-            ["Text Input", "Audio Upload", "Live Recording"],
+            ["Upload Audio File", "Record from Microphone"],
             horizontal=True
         )
         
-        text_input = ""
+        recognized_text = ""
         
-        if input_method == "Text Input":
-            text_input = st.text_area(
-                "Enter text to translate:",
-                placeholder="Type your text here...",
-                height=100
-            )
-            
-        elif input_method == "Audio Upload":
+        if input_method == "Upload Audio File":
             uploaded_file = st.file_uploader(
-                "Upload audio file",
-                type=['wav', 'mp3', 'flac', 'm4a'],
-                help="Upload an audio file to transcribe and translate"
+                "Upload an audio file",
+                type=['wav', 'mp3', 'ogg', 'flac'],
+                help="Upload an audio file containing speech to translate"
             )
             
             if uploaded_file is not None:
                 st.audio(uploaded_file)
                 
-                if st.button("🎵 Process Audio File"):
-                    if SPEECH_RECOGNITION_AVAILABLE:
+                if st.button("🔄 Process Audio", type="primary"):
+                    with st.spinner("Processing audio..."):
                         try:
-                            with st.spinner("Processing audio file..."):
-                                text_input = capture_audio_from_upload(uploaded_file)
-                                st.success(f"Transcribed text: {text_input}")
+                            recognized_text = process_audio_file(uploaded_file, source_lang)
+                            st.success("Audio processed successfully!")
                         except Exception as e:
-                            st.error(f"Audio processing failed: {e}")
-                    else:
-                        st.error("Speech recognition not available")
-                        
-        elif input_method == "Live Recording":
-            if AUDIO_RECORDER_AVAILABLE and SPEECH_RECOGNITION_AVAILABLE:
-                st.info("🎤 Click the record button below to start recording")
-                
-                # Audio recorder component
-                audio_bytes = audio_recorder(
-                    text="Click to record",
-                    recording_color="#e8b62c",
-                    neutral_color="#6aa36f",
-                    icon_name="microphone",
-                    icon_size="6x",
-                )
-                
-                if audio_bytes:
-                    st.audio(audio_bytes, format="audio/wav")
-                    
-                    if st.button("🎵 Process Recording"):
-                        try:
-                            with st.spinner("Processing recorded audio..."):
-                                text_input = process_recorded_audio(audio_bytes)
-                                st.session_state.transcribed_text = text_input
-                                st.success(f"Transcribed text: {text_input}")
-                        except Exception as e:
-                            st.error(f"Audio processing failed: {e}")
-                
-                # Show previously transcribed text
-                if st.session_state.transcribed_text:
-                    text_input = st.session_state.transcribed_text
-                    st.info(f"Current transcribed text: {text_input}")
-                    
-                    if st.button("Clear Transcribed Text"):
-                        st.session_state.transcribed_text = ""
-                        st.rerun()
-                        
-            else:
-                st.error("Live recording requires both audio-recorder-streamlit and SpeechRecognition modules")
-                st.info("Install with: pip install audio-recorder-streamlit SpeechRecognition")
-                
-                if not AUDIO_RECORDER_AVAILABLE:
-                    st.warning("❌ Audio recorder component not available")
-                if not SPEECH_RECOGNITION_AVAILABLE:
-                    st.warning("❌ Speech recognition not available")
+                            st.error(f"Error processing audio: {str(e)}")
+                            recognized_text = ""
         
-        # Translation button
-        if st.button("Translate", type="primary", disabled=not text_input):
-            if text_input:
-                try:
-                    with st.spinner("Translating..."):
-                        translated_text = translate_text_logic(
-                            text_input, source_lang, target_lang, 
-                            source_type, target_type
-                        )
-                    
-                    # Store results in session state
-                    st.session_state.current_original = text_input
-                    st.session_state.current_translation = translated_text
-                    st.session_state.current_source_lang = f"{source_lang} ({source_name})"
-                    st.session_state.current_target_lang = f"{target_lang} ({target_name})"
-                    st.session_state.translation_completed = True
-                    
-                    # Add to history
-                    add_to_history(text_input, translated_text, source_lang, target_lang)
-                    
-                    st.success("Translation completed!")
-                    
-                except Exception as e:
-                    st.error(f"Translation failed: {e}")
-                    st.session_state.translation_completed = False
-            else:
-                st.warning("Please enter text to translate")
+        else:  # Record from Microphone
+            st.info("🎙️ Click the button below to start recording")
+            
+            # Recording duration
+            duration = st.slider("Recording duration (seconds)", 3, 10, 5)
+            
+            if st.button("🔴 Start Recording", type="primary"):
+                with st.spinner(f"Recording for {duration} seconds... Speak now!"):
+                    try:
+                        recognized_text = record_audio_from_mic(source_lang, duration)
+                        st.success("Recording completed!")
+                    except Exception as e:
+                        st.error(f"Recording failed: {str(e)}")
+                        recognized_text = ""
         
-        # Display translation results and audio controls if translation is completed
-        if st.session_state.translation_completed and st.session_state.current_translation:
-            st.markdown("---")
-            
-            # Display results
-            display_translation_result(
-                st.session_state.current_original, 
-                st.session_state.current_translation, 
-                st.session_state.current_source_lang,
-                st.session_state.current_target_lang
-            )
-            
-            # Text-to-Speech section
-            st.subheader("Text-to-Speech")
-            
-            # Create columns for audio buttons
-            col_tts1, col_tts2 = st.columns(2)
-            
-            with col_tts1:
-                if st.button("Play Original", key="play_original_btn"):
-                    with st.spinner("Generating speech for original text..."):
-                        try:
-                            # Extract language code from current source lang
-                            source_code = st.session_state.current_source_lang.split(' (')[0] if '(' in st.session_state.current_source_lang else source_lang
-                            success = convert_to_speech_streamlit(st.session_state.current_original, source_code)
-                            if not success:
-                                st.error("Failed to generate/play original audio")
-                        except Exception as e:
-                            st.error(f"Error playing original: {e}")
-            
-            with col_tts2:
-                if st.button("Play Translation", key="play_translation_btn"):
-                    with st.spinner("Generating speech for translation..."):
-                        try:
-                            # Extract language code from current target lang
-                            target_code = st.session_state.current_target_lang.split(' (')[0] if '(' in st.session_state.current_target_lang else target_lang
-                            success = convert_to_speech_streamlit(st.session_state.current_translation, target_code)
-                            if not success:
-                                st.error("Failed to generate/play translation audio")
-                        except Exception as e:
-                            st.error(f"Error playing translation: {e}")
-            
-            # Clear results button
-            if st.button("Clear Translation Results"):
-                st.session_state.translation_completed = False
-                st.session_state.current_original = ""
-                st.session_state.current_translation = ""
-                st.session_state.current_source_lang = ""
-                st.session_state.current_target_lang = ""
-                st.rerun()
+        # Display recognized text
+        if recognized_text:
+            st.subheader("📝 Recognized Text")
+            st.text_area("Original Text:", recognized_text, height=100, disabled=True)
     
     with col2:
-        st.header("Translation History")
+        st.header("🌐 Translation Output")
         
-        if st.session_state.translation_history:
-            if st.button("Clear History"):
-                st.session_state.translation_history = []
-                st.rerun()
-            
-            st.markdown("---")
-            
-            for i, item in enumerate(reversed(st.session_state.translation_history)):
-                with st.expander(f" {item['timestamp']} - {item['source_lang']} → {item['target_lang']}"):
-                    st.write("**Original:**")
-                    st.write(item['original'])
-                    st.write("**Translation:**")
-                    st.write(item['translated'])
+        if recognized_text:
+            with st.spinner("Translating..."):
+                try:
+                    # Translate text
+                    translated_text = translate_text(
+                        recognized_text, source_lang, target_lang, source_type, target_type
+                    )
+                    
+                    # Display translation
+                    st.subheader("📋 Translated Text")
+                    st.text_area("Translated Text:", translated_text, height=100, disabled=True)
+                    
+                    # Generate audio
+                    with st.spinner("Converting to speech..."):
+                        try:
+                            audio_bytes = text_to_speech_bytes(translated_text, target_lang)
+                            
+                            st.subheader("🔊 Audio Output")
+                            
+                            # Show which TTS method was used
+                            african_langs = ['yo', 'ha', 'ig', 'sw', 'zu', 'xh', 'af', 'am']
+                            if target_lang in african_langs and SPITCH_TTS_AVAILABLE and os.getenv('SPITCH_API_KEY'):
+                                st.info("🎯 Generated using Spitch TTS")
+                            else:
+                                st.info("🌐 Generated using Google TTS")
+                            
+                            st.audio(audio_bytes, format='audio/mp3')
+                            
+                            # Download button
+                            st.download_button(
+                                label="💾 Download Audio",
+                                data=audio_bytes,
+                                file_name=f"translated_audio_{target_lang}.mp3",
+                                mime="audio/mp3"
+                            )
+                            
+                        except Exception as e:
+                            st.error(f"Text-to-speech failed: {str(e)}")
+                    
+                except Exception as e:
+                    st.error(f"Translation failed: {str(e)}")
         else:
-            st.info("No translations yet")
+            st.info("👆 Please provide audio input to see translation results")
     
     # Footer
-    st.markdown("---")
+    st.divider()
     st.markdown(
         """
-        <div style='text-align: center'>
-            <p><strong> Speech-to-Speech Translator</strong> | Built with Streamlit</p>
-            <p><small>Supports African languages through Spitch API and international languages through MBART</small></p>
-        </div>
-        """,
-        unsafe_allow_html=True
+        ### 📋 Translation & TTS Methods
+        - **African Language Translation**: Uses Spitch API (if available) or fallback translator
+        - **Other Language Translation**: Uses MBART model for high-quality translations
+        - **African Language TTS**: Uses Spitch TTS (if available) with Google TTS fallback
+        - **Other Language TTS**: Uses Google TTS
+        
+        ### 🔧 Requirements
+        - Microphone access for recording
+        - Internet connection for translation APIs
+        - Spitch API key (optional) for enhanced African language support
+        """
     )
 
 if __name__ == "__main__":

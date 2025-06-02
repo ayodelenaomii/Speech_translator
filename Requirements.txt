@@ -5,7 +5,6 @@ gTTS
 SpeechRecognition
 pydub
 audio-recorder-streamlit
-transformers
 torch
 gtts
 python-dotenv
