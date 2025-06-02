@@ -5,6 +5,9 @@ import logging
 from dotenv import load_dotenv
 import os
 import sys
+from spitch import Client
+import tempfile
+import io
 
 # Load environment variables
 load_dotenv()
@@ -67,16 +70,8 @@ OTHER_LANGUAGES = {
     "ms_MY": "Malay"
 }
 
-# Speech recognition language mapping
+# Speech recognition language mapping for Google STT
 SR_LANGUAGE_MAP = {
-    "yo": "en-US",  # Fallback to English for African languages not supported by Google SR
-    "ha": "en-US",
-    "ig": "en-US", 
-    "am": "en-US",
-    "sw": "sw-KE",  # Swahili (Kenya)
-    "zu": "en-US",
-    "xh": "en-US",
-    "af": "af-ZA",  # Afrikaans (South Africa)
     "en": "en-US",
     "en_XX": "en-US",
     "fr_XX": "fr-FR",
@@ -104,6 +99,18 @@ SR_LANGUAGE_MAP = {
     "vi_VN": "vi-VN",
     "id_ID": "id-ID",
     "ms_MY": "ms-MY"
+}
+
+# Spitch STT language mapping
+SPITCH_STT_LANGUAGES = {
+    "yo": "yo",  # Yoruba
+    "ha": "ha",  # Hausa
+    "ig": "ig",  # Igbo
+    "am": "am",  # Amharic
+    "sw": "sw",  # Swahili
+    "zu": "zu",  # Zulu
+    "xh": "xh",  # Xhosa
+    "af": "af",  # Afrikaans
 }
 
 def display_languages(language_dict, title):
@@ -169,12 +176,49 @@ def setup_microphone():
         print(f" Microphone setup failed: {e}")
         return False
 
-def capture_speech(source_lang, timeout=10, phrase_time_limit=5):
-    """Capture and recognize speech"""
+def spitch_speech_to_text(audio_data, language):
+    """Use Spitch API for speech-to-text transcription"""
     try:
-        # Get appropriate language for speech recognition
-        sr_lang = SR_LANGUAGE_MAP.get(source_lang, "en-US")
+        spitch_api_key = os.getenv("SPITCH_API_KEY")
+        if not spitch_api_key:
+            raise Exception("Spitch API key not found")
         
+        # Initialize Spitch client
+        client = Client(api_key=spitch_api_key)
+        
+        # Save audio data to a temporary WAV file
+        temp_audio_file = "temp_audio.wav"
+        with open(temp_audio_file, "wb") as f:
+            f.write(audio_data.get_wav_data())
+        
+        try:
+            # Read the audio file and send to Spitch
+            with open(temp_audio_file, 'rb') as audio_file:
+                response = client.speech.transcribe(
+                    language=language,
+                    content=audio_file.read()
+                )
+            
+            # Clean up temporary file
+            if os.path.exists(temp_audio_file):
+                os.remove(temp_audio_file)
+            
+            print(f'Text: {response.text}')
+            return response.text
+            
+        except Exception as e:
+            # Clean up temporary file in case of error
+            if os.path.exists(temp_audio_file):
+                os.remove(temp_audio_file)
+            raise e
+            
+    except Exception as e:
+        logger.error(f"Spitch STT failed: {e}")
+        raise Exception(f"Spitch speech-to-text failed: {e}")
+        
+def capture_speech(source_lang, timeout=10, phrase_time_limit=5):
+    """Capture and recognize speech using appropriate STT service"""
+    try:
         with mic as source:
             print(" Listening... Speak now!")
             
@@ -187,26 +231,44 @@ def capture_speech(source_lang, timeout=10, phrase_time_limit=5):
             
         print(" Converting speech to text...")
         
-        # Try to recognize speech in the appropriate language
+        # Check if this is an African language and Spitch is available
+        spitch_available = bool(os.getenv('SPITCH_API_KEY'))
+        
+        if source_lang in SPITCH_STT_LANGUAGES and spitch_available:
+            # Use Spitch for African languages
+            try:
+                spitch_lang = SPITCH_STT_LANGUAGES[source_lang]
+                recognized_text = spitch_speech_to_text(audio, spitch_lang)
+                logger.info(f"Spitch STT successful for {source_lang}: '{recognized_text}'")
+                return recognized_text
+            except Exception as e:
+                logger.warning(f"Spitch STT failed for {source_lang}: {e}")
+                print(f" Spitch STT failed, falling back to Google STT...")
+                # Fall through to Google STT
+        
+        # Use Google STT for non-African languages or as fallback
+        sr_lang = SR_LANGUAGE_MAP.get(source_lang, "en-US")
+        
         try:
             recognized_text = recognizer.recognize_google(audio, language=sr_lang)
+            logger.info(f"Google STT successful: '{recognized_text}'")
+            return recognized_text.strip()
         except sr.UnknownValueError:
-            # Fallback to English if recognition fails
+            # Final fallback to English if recognition fails
             if sr_lang != "en-US":
                 logger.info("Retrying with English language model...")
                 recognized_text = recognizer.recognize_google(audio, language="en-US")
+                return recognized_text.strip()
             else:
-                raise
-        
-        return recognized_text.strip()
+                raise Exception("Could not understand the audio - please speak more clearly")
         
     except sr.WaitTimeoutError:
         raise Exception("No speech detected within timeout period")
-    except sr.UnknownValueError:
-        raise Exception("Could not understand the audio - please speak more clearly")
     except sr.RequestError as e:
         raise Exception(f"Speech recognition service error: {e}")
     except Exception as e:
+        if "Could not understand" in str(e) or "please speak more clearly" in str(e):
+            raise e
         raise Exception(f"Speech capture failed: {e}")
 
 def translate_speech(text, source_lang, target_lang, source_type, target_type):
@@ -250,13 +312,17 @@ def translate_speech(text, source_lang, target_lang, source_type, target_type):
 
 def main():
     """Main speech-to-speech translation function"""
-    print(" Speech-to-Speech Translator")
+    print(" Speech-to-Speech Translator with Spitch STT")
     print("=" * 60)
     
     try:
         # Check API availability
         spitch_available = bool(os.getenv('SPITCH_API_KEY'))
         print(f" Spitch API: {'Available' if spitch_available else 'Not Available'}")
+        if spitch_available:
+            print(" ✓ African languages will use Spitch STT")
+        else:
+            print(" ⚠ African languages will fall back to Google STT (English)")
         
         # Setup microphone
         if not setup_microphone():
@@ -292,6 +358,12 @@ def main():
         target_name = AFRICAN_LANGUAGES.get(target_lang) or OTHER_LANGUAGES.get(target_lang)
         print(f"   Source: {source_lang} ({source_name}) [{source_type}]")
         print(f"   Target: {target_lang} ({target_name}) [{target_type}]")
+        
+        # Show STT method that will be used
+        if source_lang in SPITCH_STT_LANGUAGES and spitch_available:
+            print(f"   STT Method: Spitch (Native {source_name} support)")
+        else:
+            print(f"   STT Method: Google (Fallback)")
         
         # Main translation loop
         print(f"\n Starting speech-to-speech translation session...")
@@ -368,29 +440,35 @@ def main():
 
 def test_speech_recognition():
     """Test speech recognition functionality"""
-    print(" Testing Speech Recognition")
-    print("=" * 40)
+    print(" Testing Speech Recognition (Spitch + Google)")
+    print("=" * 50)
     
     if not setup_microphone():
         print(" Microphone setup failed")
         return
     
-    test_languages = ["en", "fr_XX", "yo"]
+    spitch_available = bool(os.getenv('SPITCH_API_KEY'))
+    print(f" Spitch API: {'Available' if spitch_available else 'Not Available'}")
+    
+    test_languages = ["yo", "ha", "en", "fr_XX"]
     
     for lang in test_languages:
         try:
-            print(f"\n Testing speech recognition for {lang}")
+            lang_name = AFRICAN_LANGUAGES.get(lang) or OTHER_LANGUAGES.get(lang) or lang
+            stt_method = "Spitch" if (lang in SPITCH_STT_LANGUAGES and spitch_available) else "Google"
+            
+            print(f"\n Testing {lang_name} ({lang}) using {stt_method} STT")
             print("Speak something in a few seconds...")
             
-            text = capture_speech(lang, timeout=5, phrase_time_limit=3)
-            print(f" Recognized: '{text}'")
+            text = capture_speech(lang, timeout=8, phrase_time_limit=5)
+            print(f" ✓ Recognized: '{text}'")
             
         except Exception as e:
-            print(f" Failed: {e}")
+            print(f" ✗ Failed: {e}")
 
 if __name__ == "__main__":
     # Ask user what they want to do
-    print(" Speech-to-Text Module")
+    print(" Speech-to-Text Module with Spitch Integration")
     print("1. Run full speech-to-speech translation")
     print("2. Test speech recognition only")
     

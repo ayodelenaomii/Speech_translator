@@ -12,6 +12,14 @@ from Speech_translator import translate_text_with_mbart, translate_text_with_spi
 from dotenv import load_dotenv
 import logging
 
+
+
+try:
+    import speech_recognition as sr
+    SPEECH_RECOGNITION_AVAILABLE = True
+except ImportError:
+    SPEECH_RECOGNITION_AVAILABLE = False
+    st.error("speech_recognition module not found. Please install it using: pip install SpeechRecognition")
 # Add Spitch TTS import
 try:
     from spitch import Client
