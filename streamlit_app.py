@@ -12,21 +12,20 @@ from Speech_translator import translate_text_with_mbart, translate_text_with_spi
 from dotenv import load_dotenv
 import logging
 
-
-
 try:
     import speech_recognition as sr
     SPEECH_RECOGNITION_AVAILABLE = True
 except ImportError:
     SPEECH_RECOGNITION_AVAILABLE = False
     st.error("speech_recognition module not found. Please install it using: pip install SpeechRecognition")
-# Add Spitch TTS import
+
+# Add Spitch imports for both STT and TTS
 try:
     from spitch import Client
-    SPITCH_TTS_AVAILABLE = True
+    SPITCH_AVAILABLE = True
 except ImportError:
-    SPITCH_TTS_AVAILABLE = False
-    logging.warning("Spitch SDK not available for TTS")
+    SPITCH_AVAILABLE = False
+    logging.warning("Spitch SDK not available")
 
 # Load environment variables
 load_dotenv()
@@ -73,21 +72,33 @@ OTHER_LANGUAGES = {
     "ar_AR": "Arabic"
 }
 
-GTTS_LANGUAGE_MAP = {
-    'yo': 'yo', 'ha': 'ha', 'ig': 'ig', 'sw': 'sw', 'zu': 'zu', 'xh': 'xh', 
-    'af': 'af', 'am': 'am', 'en': 'en', 'en_XX': 'en', 'fr_XX': 'fr', 
-    'es_XX': 'es', 'de_DE': 'de', 'it_IT': 'it', 'pt_XX': 'pt', 
-    'nl_XX': 'nl', 'pl_PL': 'pl', 'ru_RU': 'ru', 'zh_CN': 'zh', 
-    'ja_XX': 'ja', 'ko_KR': 'ko', 'hi_IN': 'hi', 'ar_AR': 'ar'
+# Spitch STT language mapping (from main speech_to_text.py)
+SPITCH_STT_LANGUAGES = {
+    "yo": "yo",  # Yoruba
+    "ha": "ha",  # Hausa
+    "ig": "ig",  # Igbo
+    "am": "am",  # Amharic
+    "sw": "sw",  # Swahili
+    "zu": "zu",  # Zulu
+    "xh": "xh",  # Xhosa
+    "af": "af",  # Afrikaans
 }
 
-# Spitch language mapping for TTS
+# Spitch TTS language mapping
 SPITCH_TTS_LANGUAGE_MAP = {
     'yo': 'yo',  # Yoruba
     'ha': 'ha',  # Hausa
     'ig': 'ig',  # Igbo
     'am': 'am',  # Amharic
     'en': 'en',  # English
+}
+
+GTTS_LANGUAGE_MAP = {
+    'yo': 'yo', 'ha': 'ha', 'ig': 'ig', 'sw': 'sw', 'zu': 'zu', 'xh': 'xh', 
+    'af': 'af', 'am': 'am', 'en': 'en', 'en_XX': 'en', 'fr_XX': 'fr', 
+    'es_XX': 'es', 'de_DE': 'de', 'it_IT': 'it', 'pt_XX': 'pt', 
+    'nl_XX': 'nl', 'pl_PL': 'pl', 'ru_RU': 'ru', 'zh_CN': 'zh', 
+    'ja_XX': 'ja', 'ko_KR': 'ko', 'hi_IN': 'hi', 'ar_AR': 'ar'
 }
 
 SR_LANGUAGE_MAP = {
@@ -99,28 +110,79 @@ SR_LANGUAGE_MAP = {
     "ko_KR": "ko-KR", "hi_IN": "hi-IN", "ar_AR": "ar-AR"
 }
 
-def get_audio_player_html(audio_bytes, autoplay=False):
-    """Create HTML audio player"""
-    b64 = base64.b64encode(audio_bytes).decode()
-    audio_html = f"""
-    <audio controls {'autoplay' if autoplay else ''}>
-        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-        Your browser does not support the audio element.
-    </audio>
-    """
-    return audio_html
+def spitch_speech_to_text(audio_data, language):
+    """Use Spitch API for speech-to-text transcription"""
+    try:
+        spitch_api_key = os.getenv("SPITCH_API_KEY")
+        if not spitch_api_key:
+            raise Exception("Spitch API key not found")
+        
+        if not SPITCH_AVAILABLE:
+            raise Exception("Spitch SDK not available")
+        
+        # Initialize Spitch client
+        client = Client(api_key=spitch_api_key)
+        
+        # Create temporary file for audio data
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            temp_file.write(audio_data)
+            temp_file_path = temp_file.name
+        
+        try:
+            # Read the audio file and send to Spitch
+            with open(temp_file_path, 'rb') as audio_file:
+                response = client.speech.transcribe(
+                    language=language,
+                    content=audio_file.read()
+                )
+            
+            # Clean up temporary file
+            os.unlink(temp_file_path)
+            
+            logger.info(f'Spitch STT result: {response.text}')
+            return response.text
+            
+        except Exception as e:
+            # Clean up temporary file in case of error
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+            raise e
+            
+    except Exception as e:
+        logger.error(f"Spitch STT failed: {e}")
+        raise Exception(f"Spitch speech-to-text failed: {e}")
 
 def process_audio_file(audio_file, source_lang):
-    """Process uploaded audio file and convert to text"""
+    """Process uploaded audio file and convert to text with Spitch STT support"""
     try:
         recognizer = sr.Recognizer()
         
         # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-            tmp_file.write(audio_file.read())
+            audio_data = audio_file.read()
+            tmp_file.write(audio_data)
             tmp_file_path = tmp_file.name
         
-        # Load audio file
+        # Check if this is an African language and Spitch is available
+        spitch_available = bool(os.getenv('SPITCH_API_KEY')) and SPITCH_AVAILABLE
+        
+        if source_lang in SPITCH_STT_LANGUAGES and spitch_available:
+            try:
+                # Use Spitch for African languages
+                spitch_lang = SPITCH_STT_LANGUAGES[source_lang]
+                text = spitch_speech_to_text(audio_data, spitch_lang)
+                logger.info(f"Spitch STT successful for {source_lang}: '{text}'")
+                
+                # Clean up temporary file
+                os.unlink(tmp_file_path)
+                return text.strip()
+                
+            except Exception as e:
+                logger.warning(f"Spitch STT failed for {source_lang}: {e}")
+                st.warning(f"Spitch STT failed, falling back to Google STT: {str(e)}")
+                # Fall through to Google STT
+        
+        # Use Google STT for non-African languages or as fallback
         with sr.AudioFile(tmp_file_path) as source:
             recognizer.adjust_for_ambient_noise(source)
             audio = recognizer.listen(source)
@@ -131,12 +193,14 @@ def process_audio_file(audio_file, source_lang):
         # Recognize speech
         try:
             text = recognizer.recognize_google(audio, language=sr_lang)
+            logger.info(f"Google STT successful: '{text}'")
         except sr.UnknownValueError:
             # Fallback to English if recognition fails
             if sr_lang != "en-US":
                 text = recognizer.recognize_google(audio, language="en-US")
+                logger.info(f"Google STT fallback to English successful: '{text}'")
             else:
-                raise
+                raise Exception("Could not understand the audio - please speak more clearly")
         
         # Clean up temporary file
         os.unlink(tmp_file_path)
@@ -152,7 +216,7 @@ def process_audio_file(audio_file, source_lang):
         raise Exception(f"Speech recognition failed: {str(e)}")
 
 def record_audio_from_mic(source_lang, duration=5):
-    """Record audio from microphone"""
+    """Record audio from microphone with Spitch STT support"""
     try:
         recognizer = sr.Recognizer()
         microphone = sr.Microphone()
@@ -163,18 +227,37 @@ def record_audio_from_mic(source_lang, duration=5):
         with microphone as source:
             audio = recognizer.listen(source, timeout=duration, phrase_time_limit=duration)
         
-        # Get appropriate language for speech recognition
+        # Check if this is an African language and Spitch is available
+        spitch_available = bool(os.getenv('SPITCH_API_KEY')) and SPITCH_AVAILABLE
+        
+        if source_lang in SPITCH_STT_LANGUAGES and spitch_available:
+            try:
+                # Use Spitch for African languages
+                spitch_lang = SPITCH_STT_LANGUAGES[source_lang]
+                audio_data = audio.get_wav_data()
+                text = spitch_speech_to_text(audio_data, spitch_lang)
+                logger.info(f"Spitch STT successful for {source_lang}: '{text}'")
+                return text.strip()
+                
+            except Exception as e:
+                logger.warning(f"Spitch STT failed for {source_lang}: {e}")
+                st.warning(f"Spitch STT failed, falling back to Google STT: {str(e)}")
+                # Fall through to Google STT
+        
+        # Use Google STT for non-African languages or as fallback
         sr_lang = SR_LANGUAGE_MAP.get(source_lang, "en-US")
         
         # Recognize speech
         try:
             text = recognizer.recognize_google(audio, language=sr_lang)
+            logger.info(f"Google STT successful: '{text}'")
         except sr.UnknownValueError:
             # Fallback to English if recognition fails
             if sr_lang != "en-US":
                 text = recognizer.recognize_google(audio, language="en-US")
+                logger.info(f"Google STT fallback to English successful: '{text}'")
             else:
-                raise
+                raise Exception("Could not understand the audio - please speak more clearly")
         
         return text.strip()
         
@@ -188,30 +271,47 @@ def record_audio_from_mic(source_lang, duration=5):
 def translate_text(text, source_lang, target_lang, source_type, target_type):
     """Translate text using appropriate method"""
     try:
+        logger.info(f"Translating: '{text}' from {source_lang} ({source_type}) to {target_lang} ({target_type})")
+        
         if source_type.lower() == "others" and target_type.lower() == "others":
             # Use MBART for non-African languages
-            return translate_text_with_mbart(text, source_lang, target_lang)
+            translation = translate_text_with_mbart(text, source_lang, target_lang)
+            logger.info(f"MBART translation: '{translation}'")
+            return translation
         else:
             # Try Spitch first for African languages
-            spitch_available = bool(os.getenv('SPITCH_API_KEY'))
+            spitch_available = bool(os.getenv('SPITCH_API_KEY')) and SPITCH_AVAILABLE
             
             if spitch_available:
                 try:
-                    return translate_text_with_spitch(text, source_lang, target_lang)
+                    translation = translate_text_with_spitch(text, source_lang, target_lang)
+                    logger.info(f"Spitch translation: '{translation}'")
+                    return translation
                 except Exception as e:
                     logger.warning(f"Spitch translation failed: {e}")
-                    return translate_text_fallback(text, source_lang, target_lang)
+                    st.warning(f"Spitch translation failed, using fallback: {str(e)}")
+                    translation = translate_text_fallback(text, source_lang, target_lang)
+                    logger.info(f"Fallback translation: '{translation}'")
+                    return translation
             else:
-                return translate_text_fallback(text, source_lang, target_lang)
+                translation = translate_text_fallback(text, source_lang, target_lang)
+                logger.info(f"Fallback translation: '{translation}'")
+                return translation
                 
     except Exception as e:
         logger.error(f"Translation failed: {e}")
-        return translate_text_fallback(text, source_lang, target_lang)
+        # Final fallback
+        try:
+            translation = translate_text_fallback(text, source_lang, target_lang)
+            logger.info(f"Emergency fallback translation: '{translation}'")
+            return translation
+        except Exception as fe:
+            raise Exception(f"All translation methods failed: {e}")
 
 def spitch_tts_bytes(text, target_lang):
     """Convert text to speech using Spitch API and return audio bytes"""
     try:
-        if not SPITCH_TTS_AVAILABLE:
+        if not SPITCH_AVAILABLE:
             raise Exception("Spitch SDK not available")
             
         spitch_api_key = os.getenv("SPITCH_API_KEY")
@@ -278,15 +378,16 @@ def text_to_speech_bytes(text, target_lang):
         if not text or not text.strip():
             raise Exception("Empty text provided for TTS")
             
-        # Check if target language is African and Spitch TTS is available
-        african_langs = ['yo', 'ha', 'ig', 'sw', 'zu', 'xh', 'af', 'am']
+        # Check if target language is in Spitch TTS mapping and API is available
+        spitch_available = bool(os.getenv('SPITCH_API_KEY')) and SPITCH_AVAILABLE
         
-        if target_lang in african_langs and SPITCH_TTS_AVAILABLE and os.getenv('SPITCH_API_KEY'):
-            logger.info(f"Attempting Spitch TTS for African language: {target_lang}")
+        if target_lang in SPITCH_TTS_LANGUAGE_MAP and spitch_available:
+            logger.info(f"Attempting Spitch TTS for language: {target_lang}")
             try:
                 return spitch_tts_bytes(text, target_lang)
             except Exception as e:
                 logger.warning(f"Spitch TTS failed, falling back to Google TTS: {e}")
+                st.warning(f"Spitch TTS failed, using Google TTS: {str(e)}")
         
         # Fallback to Google TTS
         return google_tts_bytes(text, target_lang)
@@ -310,12 +411,17 @@ def main():
         st.header("⚙️ Configuration")
         
         # API Status
-        spitch_available = bool(os.getenv('SPITCH_API_KEY'))
+        spitch_available = bool(os.getenv('SPITCH_API_KEY')) and SPITCH_AVAILABLE
         st.write("**API Status:**")
+        st.write(f"🔹 Spitch STT: {'✅ Available' if spitch_available else '❌ Not Available'}")
         st.write(f"🔹 Spitch Translation: {'✅ Available' if spitch_available else '❌ Not Available'}")
-        st.write(f"🔹 Spitch TTS: {'✅ Available' if (spitch_available and SPITCH_TTS_AVAILABLE) else '❌ Not Available'}")
+        st.write(f"🔹 Spitch TTS: {'✅ Available' if spitch_available else '❌ Not Available'}")
         st.write("🔹 MBART Model: ✅ Available")
+        st.write("🔹 Google STT: ✅ Available")
         st.write("🔹 Google TTS: ✅ Available")
+        
+        if not spitch_available:
+            st.warning("⚠️ Spitch API not available. African languages will use Google STT and fallback translation.")
         
         st.divider()
         
@@ -334,6 +440,13 @@ def main():
                 format_func=lambda x: f"{x} - {AFRICAN_LANGUAGES[x]}",
                 key="source_lang"
             )
+            
+            # Show STT method that will be used
+            if source_lang in SPITCH_STT_LANGUAGES and spitch_available:
+                st.info(f"🎯 Will use Spitch STT for {AFRICAN_LANGUAGES[source_lang]}")
+            else:
+                st.info(f"🌐 Will use Google STT for {AFRICAN_LANGUAGES[source_lang]}")
+                
         else:
             source_lang = st.selectbox(
                 "Select Language:",
@@ -341,6 +454,7 @@ def main():
                 format_func=lambda x: f"{x} - {OTHER_LANGUAGES[x]}",
                 key="source_lang"
             )
+            st.info("🌐 Will use Google STT")
         
         # Target Language
         st.subheader("🎯 Target Language")
@@ -357,6 +471,13 @@ def main():
                 format_func=lambda x: f"{x} - {AFRICAN_LANGUAGES[x]}",
                 key="target_lang"
             )
+            
+            # Show TTS method that will be used
+            if target_lang in SPITCH_TTS_LANGUAGE_MAP and spitch_available:
+                st.info(f"🎯 Will use Spitch TTS for {AFRICAN_LANGUAGES[target_lang]}")
+            else:
+                st.info(f"🌐 Will use Google TTS for {AFRICAN_LANGUAGES[target_lang]}")
+                
         else:
             target_lang = st.selectbox(
                 "Select Language:",
@@ -364,6 +485,7 @@ def main():
                 format_func=lambda x: f"{x} - {OTHER_LANGUAGES[x]}",
                 key="target_lang"
             )
+            st.info("🌐 Will use Google TTS")
     
     # Main content area
     col1, col2 = st.columns([1, 1])
@@ -395,6 +517,13 @@ def main():
                         try:
                             recognized_text = process_audio_file(uploaded_file, source_lang)
                             st.success("Audio processed successfully!")
+                            
+                            # Show which STT method was used
+                            if source_lang in SPITCH_STT_LANGUAGES and spitch_available:
+                                st.info("🎯 Processed using Spitch STT")
+                            else:
+                                st.info("🌐 Processed using Google STT")
+                                
                         except Exception as e:
                             st.error(f"Error processing audio: {str(e)}")
                             recognized_text = ""
@@ -410,6 +539,13 @@ def main():
                     try:
                         recognized_text = record_audio_from_mic(source_lang, duration)
                         st.success("Recording completed!")
+                        
+                        # Show which STT method was used
+                        if source_lang in SPITCH_STT_LANGUAGES and spitch_available:
+                            st.info("🎯 Processed using Spitch STT")
+                        else:
+                            st.info("🌐 Processed using Google STT")
+                            
                     except Exception as e:
                         st.error(f"Recording failed: {str(e)}")
                         recognized_text = ""
@@ -434,6 +570,14 @@ def main():
                     st.subheader("📋 Translated Text")
                     st.text_area("Translated Text:", translated_text, height=100, disabled=True)
                     
+                    # Show which translation method was used
+                    if (source_type.lower() == "others" and target_type.lower() == "others"):
+                        st.info("🤖 Translated using MBART")
+                    elif spitch_available:
+                        st.info("🎯 Translated using Spitch")
+                    else:
+                        st.info("🔄 Translated using fallback method")
+                    
                     # Generate audio
                     with st.spinner("Converting to speech..."):
                         try:
@@ -442,8 +586,7 @@ def main():
                             st.subheader("🔊 Audio Output")
                             
                             # Show which TTS method was used
-                            african_langs = ['yo', 'ha', 'ig', 'sw', 'zu', 'xh', 'af', 'am']
-                            if target_lang in african_langs and SPITCH_TTS_AVAILABLE and os.getenv('SPITCH_API_KEY'):
+                            if target_lang in SPITCH_TTS_LANGUAGE_MAP and spitch_available:
                                 st.info("🎯 Generated using Spitch TTS")
                             else:
                                 st.info("🌐 Generated using Google TTS")
@@ -471,15 +614,27 @@ def main():
     st.markdown(
         """
         ### 📋 Translation & TTS Methods
-        - **African Language Translation**: Uses Spitch API (if available) or fallback translator
-        - **Other Language Translation**: Uses MBART model for high-quality translations
-        - **African Language TTS**: Uses Spitch TTS (if available) with Google TTS fallback
-        - **Other Language TTS**: Uses Google TTS
+        
+        **Speech-to-Text (STT):**
+        - **African Languages**: Uses Spitch STT (if available) with Google STT fallback
+        - **Other Languages**: Uses Google STT
+        
+        **Translation:**
+        - **African Language Pairs**: Uses Spitch Translation API (if available) or fallback translator
+        - **Other Language Pairs**: Uses MBART model for high-quality translations
+        
+        **Text-to-Speech (TTS):**
+        - **African Languages**: Uses Spitch TTS (if available) with Google TTS fallback
+        - **Other Languages**: Uses Google TTS
         
         ### 🔧 Requirements
         - Microphone access for recording
         - Internet connection for translation APIs
         - Spitch API key (optional) for enhanced African language support
+        
+        ### 🎯 Supported African Languages with Spitch
+        - **STT & Translation**: Yoruba, Hausa, Igbo, Amharic, Swahili, Zulu, Xhosa, Afrikaans
+        - **TTS**: Yoruba, Hausa, Igbo, Amharic, English
         """
     )
 
