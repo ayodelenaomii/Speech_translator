@@ -107,6 +107,7 @@ SPITCH_STT_LANGUAGES = {
     "ha": "ha",  # Hausa
     "ig": "ig",  # Igbo
     "am": "am",  # Amharic
+    "en": "en",  #English
 }
 
 def display_languages(language_dict, title):
