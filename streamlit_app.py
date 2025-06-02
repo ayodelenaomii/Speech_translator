@@ -285,13 +285,7 @@ def add_to_history(original, translated, source_lang, target_lang):
         'timestamp': time.strftime("%H:%M:%S")
     })
 
-def main():
-    st.set_page_config(
-        page_title="Speech-to-Speech Translator",
-        page_icon="🗣️",
-        layout="wide"
-    )
-    
+
     # Initialize session state
     initialize_session_state()
     
