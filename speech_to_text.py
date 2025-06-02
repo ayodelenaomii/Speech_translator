@@ -107,10 +107,6 @@ SPITCH_STT_LANGUAGES = {
     "ha": "ha",  # Hausa
     "ig": "ig",  # Igbo
     "am": "am",  # Amharic
-    "sw": "sw",  # Swahili
-    "zu": "zu",  # Zulu
-    "xh": "xh",  # Xhosa
-    "af": "af",  # Afrikaans
 }
 
 def display_languages(language_dict, title):
@@ -215,7 +211,7 @@ def spitch_speech_to_text(audio_data, language):
     except Exception as e:
         logger.error(f"Spitch STT failed: {e}")
         raise Exception(f"Spitch speech-to-text failed: {e}")
-        
+
 def capture_speech(source_lang, timeout=10, phrase_time_limit=5):
     """Capture and recognize speech using appropriate STT service"""
     try:

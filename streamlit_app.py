@@ -93,6 +93,8 @@ SPITCH_TTS_LANGUAGE_MAP = {
     'en': 'en',  # English
 }
 
+
+
 GTTS_LANGUAGE_MAP = {
     'yo': 'yo', 'ha': 'ha', 'ig': 'ig', 'sw': 'sw', 'zu': 'zu', 'xh': 'xh', 
     'af': 'af', 'am': 'am', 'en': 'en', 'en_XX': 'en', 'fr_XX': 'fr', 
